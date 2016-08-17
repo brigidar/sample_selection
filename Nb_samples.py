@@ -2,11 +2,11 @@
 #########################################################################################
 #											#
 # Name	      :	nb_samples.py								#
-# Version     : 0.3								#
+# Version     : 0.4								#
 # Project     : targeted Metabolomics						#
 # Description : Script to select stool samples based on weight, sample id, time or combination of them		#
 # Author      : Brigida Rusconi								#
-# Date        : August 16th, 2016							#
+# Date        : August 17th, 2016							#
 #											#
 #########################################################################################
 
@@ -175,13 +175,44 @@ if dol_table=='True':
         match=args.matched
         matched1=read_csv(match,sep='\t',dtype=object)
         matched1.Days=to_numeric(matched1.Days)
-        #make a range from the days that are selected to have more control hits, maybe modify so that interval can be changed and not fixed
+        
+        cases=matched1[matched1.Phenotype=='Cases']
+        #find closest day to onset
+        cases.reset_index(inplace=True)
+        rd=list()
+        for item in df6['DOL_dec']:
+            rd.append(floor(item))
+        df6.insert(df6.columns.size,'rounded',rd)
+        df6.reset_index(inplace=True)
+        closest=list()
+
+        for i,item in enumerate(cases.Sample.unique()):
+            l=list(df6[(df6.Patient==item) & (df6.rounded<cases.Days[i])]['rounded'].values)
+            if len(l)>0:
+                closest.append(min(l, key=lambda x:cases.Days[i]-x))
+            else:
+                closest.append(cases.Days[i])
+        cases.insert(cases.columns.size,'closest',closest)
+        cases.set_index(['Sample','closest'],inplace=True)
+        df6.set_index(['Patient','rounded'],inplace=True)
+        sel_cases=df6[df6.index.isin(cases.index)]
+        sel_cases.reset_index(inplace=True)
+        #replace closest sample time point for controls to match
+        controls=matched1[matched1.Phenotype=='Controls']
+        controls.reset_index(inplace=True)
+
+        cases.reset_index(inplace=True)
+        for i,item in enumerate(cases.Sample):
+            for x,item1 in enumerate(controls.Matching_Case):
+                if item==item1:
+                    controls.Days[x]=cases.closest[i]
+
+        #make a range from the days that are selected to have more control hits, maybe modify so that interval can be changed and not fixed currently only 3 days before onset
         re=list()
         id=list()
-        
-        for i,item in enumerate(matched1.Days):
-            re.append(range((int(matched1.Days[i])-3),(int(matched1.Days[i])+3+1)))
-            id.append(repeat(matched1.Sample[i],(3*2+1)).tolist())
+        for i,item in enumerate(controls.Days):
+            re.append(range((int(controls.Days[i])-3),(int(controls.Days[i]+1))))
+            id.append(repeat(controls.Sample[i],len(re[i])).tolist())
         flat_re=[n for item in re for n in item]
         flat_id=[n for item in id for n in item]
         ri=zip(flat_id,flat_re)
@@ -189,20 +220,17 @@ if dol_table=='True':
         tes=tes.reshape(-1,2)
         matched2=DataFrame(tes,columns=['Sample','Days'])
         matched2.Days=matched2.Days.astype(float)
-        rd=list()
-        for item in df6['DOL_dec']:
-            rd.append(floor(item))
-        df6.insert(df6.columns.size,'rounded',rd)
+
         df6.reset_index(inplace=True)
         df7=DataFrame()
         for item in matched2.Sample.unique():
             l=df6[df6.Patient==item]
             g=list(matched2[matched2.Sample==item]['Days'])
             df7=df7.append(l[l['rounded'].isin(g)])
-        pdb.set_trace()
+        df8=concat([sel_cases,df7],axis=0)
 
 #pdb.set_trace()
-        df8=df7.sort(columns=['NEC','Patient','time_collected'])
+        df8=df8.sort(columns=['NEC','Patient','time_collected'])
 
 
         with open(output2 ,'w') as output:
