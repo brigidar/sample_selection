@@ -2,11 +2,11 @@
 #########################################################################################
 #											#
 # Name	      :	nb_samples.py								#
-# Version     : 0.2								#
+# Version     : 0.3								#
 # Project     : targeted Metabolomics						#
 # Description : Script to select stool samples based on weight, sample id, time or combination of them		#
 # Author      : Brigida Rusconi								#
-# Date        : August 15th, 2016							#
+# Date        : August 16th, 2016							#
 #											#
 #########################################################################################
 
@@ -16,6 +16,8 @@ from pandas import *
 from numpy import *
 import math
 from math import floor
+import re
+from re import search
 
 parser = argparse.ArgumentParser()
 
@@ -27,6 +29,7 @@ parser.add_argument('-s', '--sample', help="list with samples. Required: header:
 parser.add_argument('-d', '--days', help="list with days.Required: header: Days, file format: txt")
 parser.add_argument('-t', '--DOL', help="make table with DOL of stool sample list (True/False)",default=False)
 parser.add_argument('-m', '--matched', help="list with sample and days to look up")
+parser.add_argument('-a','--all',help="output with all matching time points and samples")
 
 args = parser.parse_args()
 output_file = args.output
@@ -38,32 +41,29 @@ dol_table=args.DOL
 
 
 
-test=read_csv(input_file,sep='\t', dtype=object)
+data=read_csv(input_file,sep='\t', dtype=object)
 dob=read_csv(DOB, dtype=object)
-
-test.rename(columns={'Time Collected':'time_collected'},inplace=True)
+data.rename(columns={'Time Collected':'time_collected'},inplace=True)
 dob.rename(columns={'Infant date of birth':'DOB'},inplace=True)
 dob.DOB=to_datetime(dob.DOB)
-test.dropna(subset=['time_collected'], inplace=True)
-test[test.time_collected != 'D/T Unknown']
-test.time_collected=to_datetime(test.time_collected, errors='coerce')
-test.Weight=to_numeric(test.Weight,errors='coerce')
-test.dropna(subset=['Weight'], inplace=True)
+data.dropna(subset=['time_collected'], inplace=True)
+data[data.time_collected != 'D/T Unknown']
+data.time_collected=to_datetime(data.time_collected, errors='coerce')
+data.Weight=to_numeric(data.Weight,errors='coerce')
+data.dropna(subset=['Weight'], inplace=True)
 
 #sum weight of duplicate values
-df1=test.groupby(['Study','time_collected'])['Weight'].sum().reset_index()
-df1.set_index(['Study','time_collected'], inplace=True)
+#df1=data.groupby(['Study','time_collected'])['Weight'].sum().reset_index()
+#http://pandas.pydata.org/pandas-docs/stable/groupby.html
 
+data['total_weight']=data.groupby(['Study','time_collected'])['Weight'].transform('sum')
+
+#pdb.set_trace()
 #reorder dataframe without duplicates of study and time collected
-test.drop_duplicates(subset=['Study','time_collected'], inplace=True)
-test.set_index(['Study','time_collected'],inplace=True)
 
-test.drop(['Weight'],axis=1,inplace=True)
 #replace with sum values of weight
 
-df3=concat([test,df1['Weight']],axis=1,join_axes=[df1.index])
 
-df3.reset_index(inplace=True)
 
 #----------------optional------------- weight of sample--------------------------------
 if args.weight:
@@ -71,20 +71,24 @@ if args.weight:
     df5=DataFrame()
     
 #get samples with enough weight
-    for i in df3.index:
-        if df3.Patient[i]>='100.01':
-            df4=df3[df3.Weight >=w]
-        else:
-            df5=df3[df3.Weight >=250]
+# & has higher precedence than == BE CAREFUL http://pandas.pydata.org/pandas-docs/stable/indexing.html#boolean-indexing
+# with unique each item is only iterated once
+#have to remove any characters so that it will not fail on the float conversion
 
-    if df5.index.size>0:
-        df6=concat([df4,df5],axis=0)
-    else:
-        df6=df4
+    uniq=list(data.Patient.unique())
+    for i,item in enumerate(uniq):
+        if bool(search(r'\d',item)) is not True:
+            uniq.pop(i)
+    for item in uniq:
+            if float(item)>=float(100.01):
+                df5=df5.append(data[(data.Patient==item) & (data.total_weight >=float(w))])
+            else:
+                df5=df5.append(data[(data.Patient==item) & (data.total_weight >=float(250))])
+
 else:
-    df6=df3
+    df5=data
 
-
+#pdb.set_trace()
 #----------------optional-------------selected samples--------------------------------
 
 if args.sample:
@@ -92,13 +96,13 @@ if args.sample:
     samp1=read_csv(samp,sep='\t',dtype=object)
     samp1.sort('Sample',inplace=True)
     samp1.set_index('Sample',inplace=True)
-    df6.set_index('Patient',inplace=True)
-    df6[df6.index.isin(samp1.index)]
-    df6.reset_index(inplace=True)
+    df5.set_index('Patient',inplace=True)
+    df5[df5.index.isin(samp1.index)]
+    df5.reset_index(inplace=True)
     #group samples by patient
-    nb_sampl=df6.groupby('Patient').size()
+    nb_sampl=df5.groupby('Patient').size()
 else:
-    nb_sampl=DataFrame(df6.groupby('Patient').size(),columns=['count'])
+    nb_sampl=DataFrame(df5.groupby('Patient').size(),columns=['count'])
 
 #--------------------count of samples-----------------------------
 with open(output_file ,'w') as output:
@@ -107,23 +111,22 @@ with open(output_file ,'w') as output:
 #----------------------------------------------------------------------------------------
 #-----------------DOL information if wanted--------------------------------------------------------
 if dol_table=='True':
+    output2=args.all
     
     #make list with DOL value
-    df6.set_index(['Patient'],inplace=True)
+    df5.set_index(['Patient'],inplace=True)
     dob.set_index(['Study ID'],inplace=True)
 
-    df7=concat([df6,dob['DOB']],axis=1,join_axes=[df6.index])
-    df7['DOL']=df7['time_collected']-df7['DOB']
+    df6=concat([df5,dob['DOB']],axis=1,join_axes=[df5.index])
+    df6['DOL']=df6['time_collected']-df6['DOB']
 
     #convert to float days
     new=list()
-    for item in df7['DOL']:
+    for item in df6['DOL']:
         new.append(float("{0:.2f}".format(item.total_seconds()/86400)))
 
-    df7.insert(df7.columns.size, "DOL_dec",new)
-#    df7.rename(columns={'Unnamed: 11':'notes'},inplace=True)
-#    df7.drop(['notes'],axis=1,inplace=True)
-    df7.reset_index()
+    df6.insert(df6.columns.size, "DOL_dec",new)
+
 
     #--------------------optional---------select time point-------------------------------------------
     if args.days and (not args.sample) and (not args.matched):
@@ -131,16 +134,16 @@ if dol_table=='True':
         dy1=read_csv(day,sep='\t',dtype=object)
         dy1=list(to_numeric(dy1.Days))
         rd=list()
-        for item in df7['DOL_dec']:
+        for item in df6['DOL_dec']:
             rd.append(floor(item))
-        df7.insert(df7.columns.size,'rounded',rd)
-        df7.reset_index(inplace=True)
+        df6.insert(df6.columns.size,'rounded',rd)
+        df6.reset_index(inplace=True)
         pos=list()
-        for i in df7.index:
-            if float(df7['rounded'][i]) in dy1:
+        for i in df6.index:
+            if float(df6['rounded'][i]) in dy1:
                 pos.append(i)
-        df8=df7[df7.index.isin(pos)]
-        with open("stool_timepoints.txt" ,'w') as output:
+        df8=df6[df6.index.isin(pos)]
+        with open(output2 ,'w') as output:
             df8.to_csv(output, sep='\t')
 
     #--------------------optional---------select time point for select samples-------------------------------------------
@@ -153,19 +156,19 @@ if dol_table=='True':
         samp1.sort('Sample',inplace=True)
         samp1.set_index('Sample',inplace=True)
         rd=list()
-        for item in df7['DOL_dec']:
+        for item in df6['DOL_dec']:
             rd.append(floor(item))
-        df7.insert(df7.columns.size,'rounded',rd)
-        df7.reset_index(inplace=True)
+        df6.insert(df6.columns.size,'rounded',rd)
+        df6.reset_index(inplace=True)
         pos=list()
-        for i in df7.index:
-            if float(df7['rounded'][i]) in dy1:
+        for i in df6.index:
+            if float(df6['rounded'][i]) in dy1:
                 pos.append(i)
-        df8=df7[df7.index.isin(pos)]
+        df8=df6[df6.index.isin(pos)]
         df8.set_index('Patient',inplace=True)
         df8=df8[df8.index.isin(samp1.index)]
         df8.reset_index(inplace=True)
-        with open("stool_timepoints.txt" ,'w') as output:
+        with open(output2 ,'w') as output:
             df8.to_csv(output, sep='\t')
 
     elif args.matched and (not args.days) and (not args.sample):
@@ -175,27 +178,33 @@ if dol_table=='True':
         #make a range from the days that are selected to have more control hits, maybe modify so that interval can be changed and not fixed
         re=list()
         id=list()
+        
         for i,item in enumerate(matched1.Days):
-            re.append(range((int(item)-3),(int(item)+3)))
-            id.append(repeat(matched1.Sample[i],len(re)).tolist())
-
+            re.append(range((int(matched1.Days[i])-3),(int(matched1.Days[i])+3+1)))
+            id.append(repeat(matched1.Sample[i],(3*2+1)).tolist())
         flat_re=[n for item in re for n in item]
         flat_id=[n for item in id for n in item]
         ri=zip(flat_id,flat_re)
-        matched2=DataFrame(ri, columns=['Sample','Days'])
+        tes=concatenate([z for z in ri])
+        tes=tes.reshape(-1,2)
+        matched2=DataFrame(tes,columns=['Sample','Days'])
         matched2.Days=matched2.Days.astype(float)
-        matched2.set_index(['Sample','Days'], inplace=True)
         rd=list()
-        for item in df7['DOL_dec']:
+        for item in df6['DOL_dec']:
             rd.append(floor(item))
-        df7.insert(df7.columns.size,'rounded',rd)
-        df7.reset_index(inplace=True)
-        df7.set_index(['Patient','rounded'],inplace=True)
+        df6.insert(df6.columns.size,'rounded',rd)
+        df6.reset_index(inplace=True)
+        df7=DataFrame()
+        for item in matched2.Sample.unique():
+            l=df6[df6.Patient==item]
+            g=list(matched2[matched2.Sample==item]['Days'])
+            df7=df7.append(l[l['rounded'].isin(g)])
         pdb.set_trace()
-        df8=df7[df7.index.isin(matched2.index)]
+
 #pdb.set_trace()
+        df8=df7.sort(columns=['NEC','Patient','time_collected'])
 
 
-        with open("stool_timepoints.txt" ,'w') as output:
-            df8.to_csv(output, sep='\t')
+        with open(output2 ,'w') as output:
+            df8.to_csv(output, sep='\t',index=False)
 
