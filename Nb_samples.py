@@ -86,7 +86,8 @@ if args.weight:
                 df5=df5.append(data[(data.Patient==item) & (data.total_weight >=float(250))])
 
 else:
-    df5=data
+    df5=data[data.Weight>0]
+
 
 #pdb.set_trace()
 #----------------optional-------------selected samples--------------------------------
@@ -97,7 +98,7 @@ if args.sample:
     samp1.sort('Sample',inplace=True)
     samp1.set_index('Sample',inplace=True)
     df5.set_index('Patient',inplace=True)
-    df5[df5.index.isin(samp1.index)]
+    df5=df5[df5.index.isin(samp1.index)]
     df5.reset_index(inplace=True)
     #group samples by patient
     nb_sampl=df5.groupby('Patient').size()
@@ -170,7 +171,7 @@ if dol_table=='True':
         df8.reset_index(inplace=True)
         with open(output2 ,'w') as output:
             df8.to_csv(output, sep='\t')
-
+#--------------------optional---------select matched controls/cases-------------------------------------------
     elif args.matched and (not args.days) and (not args.sample):
         match=args.matched
         matched1=read_csv(match,sep='\t',dtype=object)
@@ -228,11 +229,44 @@ if dol_table=='True':
             g=list(matched2[matched2.Sample==item]['Days'])
             df7=df7.append(l[l['rounded'].isin(g)])
         df8=concat([sel_cases,df7],axis=0)
-
+        # append onset day if you use index.value you get the index of the match
+        onset=list()
+        for item in df8.Patient:
+            onset.append(matched1.Days[matched1[matched1.Sample==item].index.values].values[0])
 #pdb.set_trace()
-        df8=df8.sort(columns=['NEC','Patient','time_collected'])
-
-
+        df8.reset_index(inplace=True)
+        df8.insert(df8.columns.size,'onset',onset)
+                    #pdb.set_trace()
+        df8.sort(columns=['NEC','Patient','time_collected'],inplace=True)
+        df8.drop('index',inplace=True,axis=1)
+        missing=list()
+        for item in matched1.Sample:
+            if item in df8.Patient.values:
+                pass
+            else:
+                missing.append(item)
+#pdb.set_trace()
         with open(output2 ,'w') as output:
             df8.to_csv(output, sep='\t',index=False)
 
+        with open("missing.txt" ,'w') as output:
+            for item in missing:
+                output.write('%s\n' % item)
+    else:
+        samp=args.sample
+        samp1=read_csv(samp,sep='\t',dtype=object)
+        samp1.sort('Sample',inplace=True)
+        samp1.set_index('Sample',inplace=True)
+        df6=df5[df5.index.isin(samp1.index)]
+        df7=concat([df5,dob['DOB']],axis=1,join_axes=[df5.index])
+        df7.reset_index(inplace=True)
+        df7['DOL']=df7['time_collected']-df7['DOB']
+        new=list()
+        for item in df7['DOL']:
+            new.append(float("{0:.2f}".format(item.total_seconds()/86400)))
+    
+        df7.insert(df7.columns.size, "DOL_dec",new)
+        df8=df7.sort(columns=['NEC','Patient','time_collected'])
+#pdb.set_trace()
+        with open(output2 ,'w') as output:
+            df8.to_csv(output, sep='\t',index=False)
